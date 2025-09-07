@@ -31,7 +31,7 @@ DEFAULT_DOCKING_PARAMS = {
 
 # 文件路径配置
 PATHS = {
-    "resource_dir": "/home/davis/projects/AstraMolecula/dockingVinaApp/resource",
+    "resource_dir": "/home/davis/projects/genion_quantum/dockingvina/resource",
     "temp_dir": "/tmp/docking_vina_app",
-    "log_dir": "/home/davis/projects/AstraMolecula/dockingVinaApp/logs"
+    "log_dir": "/home/davis/projects/serverlogs"
 }
