@@ -21,6 +21,7 @@ sys.path.append(str(current_dir))
 
 from config.logging_config import setup_logging, get_log_file_path
 from async_task_processor import AsyncTaskProcessor
+from docking_task_processor import background_task_runner
 
 # 设置日志系统
 log_file = get_log_file_path()
@@ -29,11 +30,13 @@ logger = logging.getLogger(__name__)
 
 # 全局异步任务处理器
 async_processor = None
+# 后台任务
+background_task = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # —— 应用启动时执行 —— 
-    global async_processor
+    global async_processor, background_task
     
     logger.info("Starting Docking Vina API...")
     
@@ -41,13 +44,29 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing async task processor...")
     async_processor = AsyncTaskProcessor()
     
+    # 启动后台定时任务
+    logger.info("Starting background task runner...")
+    background_task = asyncio.create_task(background_task_runner())
+    
     logger.info("Docking Vina API startup complete")
     yield
     
     # —— 应用关闭时执行 ——
     logger.info("Shutting down Docking Vina API...")
+    
+    # 取消后台任务
+    if background_task:
+        logger.info("Cancelling background task...")
+        background_task.cancel()
+        try:
+            await background_task
+        except asyncio.CancelledError:
+            logger.info("Background task cancelled successfully")
+    
+    # 关闭异步任务处理器
     if async_processor:
         await async_processor.shutdown()
+    
     logger.info("Docking Vina API shutdown complete")
 
 app = FastAPI(

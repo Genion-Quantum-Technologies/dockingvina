@@ -6,7 +6,7 @@
 set -e
 
 # 项目路径
-PROJECT_DIR="/home/davis/projects/genion_quantum/dockingvina"
+PROJECT_DIR="/home/davis/projects/dockingvina"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 

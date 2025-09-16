@@ -124,3 +124,13 @@ python main.py
 2. **Vina运行失败**: 检查AutoDock Vina是否正确安装
 3. **文件路径错误**: 确保所有输入文件路径正确且文件存在
 4. **权限问题**: 确保应用有权限读写工作目录
+
+
+
+git clone https://github.com/durrantlab/gypsum_dl.git
+# or
+git clone git@github.com:durrantlab/gypsum_dl.git
+git clone https://github.com/SongyouZhong/gypsum_dl.git
+
+<!-- # 需要修改gypsum_dl/Start.py的源码
+# replace 'os.mkdir(params["output_folder"])' with os.makedirs(params["output_folder"], exist_ok=True) -->

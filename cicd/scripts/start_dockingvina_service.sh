@@ -6,7 +6,7 @@
 set -e  # 遇到错误立即退出
 
 # 配置变量
-PROJECT_DIR="/home/davis/projects/genion_quantum/dockingvina"
+PROJECT_DIR="/home/davis/projects/dockingvina"
 MAMBA_ENV_NAME="dockingvina"
 SERVICE_PORT=8002
 LOG_DIR="/home/davis/projects/serverlogs/dockingvina"
