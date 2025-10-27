@@ -35,3 +35,13 @@ PATHS = {
     "temp_dir": "/tmp/docking_vina_app",
     "log_dir": "/home/davis/projects/serverlogs"
 }
+
+# BINANA 分析配置
+BINANA_CONFIG = {
+    "enabled": True,  # 是否启用 BINANA 分析
+    "auto_analyze": True,  # 对接完成后自动进行分析
+    "timeout": 300,  # 分析超时时间（秒）
+    "binana_path": None,  # BINANA 路径，None 为自动检测
+    "save_intermediate_files": False,  # 是否保存中间文件
+    "analysis_output_dir": "binding_analysis"  # 分析结果输出目录名
+}

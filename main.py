@@ -6,6 +6,7 @@ FastAPI wrapper for Docking Pipeline
 import os
 import sys
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,16 @@ sys.path.append(str(current_dir))
 from config.logging_config import setup_logging, get_log_file_path
 from async_task_processor import AsyncTaskProcessor
 from docking_task_processor import background_task_runner
+
+# 导入BINANA分析模块
+try:
+    sys.path.append(str(current_dir / "analysis"))
+    from binana_analyzer import BindingAnalyzer, analyze_binding_quick
+    from report_generator import ReportGenerator
+    BINANA_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: BINANA analysis not available: {e}")
+    BINANA_AVAILABLE = False
 
 # 设置日志系统
 log_file = get_log_file_path()
@@ -137,8 +148,174 @@ async def status():
     return {
         "status": "running",
         "active_tasks": async_processor.get_task_count(),
-        "active_task_ids": async_processor.get_active_tasks()
+        "active_task_ids": async_processor.get_active_tasks(),
+        "binana_available": BINANA_AVAILABLE
     }
+
+# === BINANA Binding Analysis Endpoints ===
+
+@app.post("/analyze_binding")
+async def analyze_binding_mode(
+    receptor_file: str,
+    ligand_file: str,
+    compound_id: Optional[str] = None
+):
+    """
+    Analyze binding mode between receptor and ligand using BINANA.
+    
+    Args:
+        receptor_file: Path to receptor PDBQT file
+        ligand_file: Path to ligand PDBQT file  
+        compound_id: Optional identifier for the compound
+    
+    Returns:
+        Binding analysis results including interaction statistics and key residues
+    """
+    if not BINANA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="BINANA analysis not available")
+    
+    try:
+        # Validate file paths
+        if not os.path.exists(receptor_file):
+            raise HTTPException(status_code=404, detail=f"Receptor file not found: {receptor_file}")
+        if not os.path.exists(ligand_file):
+            raise HTTPException(status_code=404, detail=f"Ligand file not found: {ligand_file}")
+        
+        # Run analysis
+        if 'analyze_binding_quick' not in globals():
+            raise HTTPException(status_code=503, detail="BINANA analysis functions not available")
+        result = analyze_binding_quick(receptor_file, ligand_file, compound_id)
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=f"Analysis failed: {result.get('error', 'Unknown error')}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Binding analysis error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+@app.get("/analyze_docking_results/{run_id}")
+async def analyze_docking_results(run_id: str):
+    """
+    Analyze binding modes for all results from a docking run.
+    
+    Args:
+        run_id: The UUID of the docking run
+        
+    Returns:
+        Enhanced docking results with binding analysis for each compound
+    """
+    if not BINANA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="BINANA analysis not available")
+    
+    try:
+        # Look for docking results in resource directory
+        resource_dir = Path("/home/davis/projects/dockingvina/resource")
+        run_dir = resource_dir / run_id
+        
+        if not run_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Docking run not found: {run_id}")
+        
+        # Check if results already have binding analysis
+        results_file = run_dir / "dockRes.json"
+        if not results_file.exists():
+            raise HTTPException(status_code=404, detail=f"Docking results not found in run: {run_id}")
+        
+        # Load existing results
+        with open(results_file, 'r') as f:
+            results = json.load(f)
+        
+        # Check if binding analysis already exists
+        if results and 'binding_analysis' in results[0]:
+            logger.info(f"Binding analysis already exists for run {run_id}")
+            return {
+                "run_id": run_id,
+                "results": results,
+                "analysis_status": "existing"
+            }
+        
+        # Find receptor file
+        receptor_file = None
+        for result in results:
+            if 'protein_path' in result:
+                receptor_file = result['protein_path']
+                break
+        
+        if not receptor_file or not os.path.exists(receptor_file):
+            raise HTTPException(status_code=404, detail="Receptor file not found in results")
+        
+        # Run binding analysis for each result
+        if 'BindingAnalyzer' not in globals():
+            raise HTTPException(status_code=503, detail="BINANA analyzer not available")
+        analyzer = BindingAnalyzer(show_output=False)
+        enhanced_results = []
+        
+        for result in results:
+            enhanced_result = result.copy()
+            
+            ligand_file = result.get('file', '')
+            if ligand_file and os.path.exists(ligand_file):
+                compound_id = result.get('title', 'unknown')
+                analysis_result = analyzer.analyze_docking_result(
+                    receptor_file=receptor_file,
+                    ligand_file=ligand_file,
+                    compound_id=compound_id,
+                    output_dir=str(run_dir / 'binding_analysis' / compound_id)
+                )
+                enhanced_result['binding_analysis'] = analysis_result
+            else:
+                enhanced_result['binding_analysis'] = {"error": "Ligand file not found", "success": False}
+            
+            enhanced_results.append(enhanced_result)
+        
+        # Save enhanced results
+        enhanced_file = run_dir / "dockRes_with_binding.json"
+        with open(enhanced_file, 'w') as f:
+            json.dump(enhanced_results, f, indent=2)
+        
+        # Generate summary
+        if 'ReportGenerator' not in globals():
+            summary = {"error": "ReportGenerator not available"}
+        else:
+            summary = ReportGenerator.create_analysis_summary(enhanced_results)
+        
+        return {
+            "run_id": run_id,
+            "results": enhanced_results,
+            "summary": summary,
+            "analysis_status": "completed"
+        }
+        
+    except Exception as e:
+        logger.error(f"Docking results analysis error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+@app.get("/binding_analysis_summary/{run_id}")
+async def get_binding_analysis_summary(run_id: str):
+    """Get summary of binding analysis for a docking run."""
+    if not BINANA_AVAILABLE:
+        raise HTTPException(status_code=503, detail="BINANA analysis not available")
+    
+    try:
+        resource_dir = Path("/home/davis/projects/dockingvina/resource")
+        run_dir = resource_dir / run_id
+        summary_file = run_dir / "binding_analysis_summary.json"
+        
+        if not summary_file.exists():
+            raise HTTPException(status_code=404, detail=f"Binding analysis summary not found for run: {run_id}")
+        
+        with open(summary_file, 'r') as f:
+            summary = json.load(f)
+        
+        return {
+            "run_id": run_id,
+            "summary": summary
+        }
+        
+    except Exception as e:
+        logger.error(f"Summary retrieval error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve summary: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -28,7 +28,37 @@ from meeko import RDKitMolCreate
 from rdkit.Chem import AllChem
 import copy
 import random
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor
+
+# Add BINANA analysis capabilities
+try:
+    # Add analysis module path 
+    analysis_path = current_dir / "analysis"
+    config_path = current_dir
+    
+    if str(analysis_path) not in sys.path:
+        sys.path.append(str(analysis_path))
+    if str(config_path) not in sys.path:
+        sys.path.append(str(config_path))
+    
+    from binana_analyzer import BindingAnalyzer
+    
+    # Set default BINANA configuration
+    BINANA_CONFIG = {
+        "enabled": True,
+        "auto_analyze": True,
+        "timeout": 300,
+        "binana_path": None,
+        "save_intermediate_files": False,
+        "analysis_output_dir": "binding_analysis"
+    }
+    BINANA_AVAILABLE = BINANA_CONFIG.get("enabled", False)
+    print(f"BINANA analysis available: {BINANA_AVAILABLE}")
+except ImportError as e:
+    print(f"Warning: BINANA analysis not available: {e}")
+    BINANA_AVAILABLE = False
+    BINANA_CONFIG = {"enabled": False}
 
 # 脚本会在每次运行时，生成一个随机的 UUID，
 # 并在 resource 文件夹下创建一个以 UUID 命名的子目录，将所有中间文件/最终结果存放在其中。
@@ -482,6 +512,82 @@ def clean_intermediate_files(work_dir):
     print("✅ Intermediate files cleaned up.")
 
 
+def perform_binding_analysis(dfRes: pd.DataFrame, receptor_path: str, parent_path: str) -> pd.DataFrame:
+    """
+    Perform BINANA binding mode analysis on docking results.
+    
+    Args:
+        dfRes: DataFrame with docking results
+        receptor_path: Path to receptor PDBQT file
+        parent_path: Parent directory containing docking results
+        
+    Returns:
+        Enhanced DataFrame with binding analysis data
+    """
+    if not BINANA_AVAILABLE:
+        print("Warning: BINANA not available, skipping binding analysis")
+        return dfRes
+        
+    analyzer = BindingAnalyzer(show_output=False)
+    
+    # Create binding analysis results list
+    enhanced_results = []
+    
+    for idx, row in dfRes.iterrows():
+        enhanced_row = row.copy()
+        
+        try:
+            # Get ligand file path from docking results
+            ligand_file = row.get('file', '')
+            if not ligand_file or not os.path.exists(ligand_file):
+                print(f"Warning: Ligand file not found for {row.get('title', 'unknown')}: {ligand_file}")
+                enhanced_row['binding_analysis'] = {"error": "Ligand file not found", "success": False}
+            else:
+                # Run BINANA analysis
+                compound_id = row.get('title', f'compound_{idx}')
+                binana_output_dir = os.path.join(parent_path, 'binding_analysis', compound_id)
+                
+                result = analyzer.analyze_docking_result(
+                    receptor_file=receptor_path,
+                    ligand_file=ligand_file,
+                    compound_id=compound_id,
+                    output_dir=binana_output_dir
+                )
+                
+                enhanced_row['binding_analysis'] = result
+                
+        except Exception as e:
+            print(f"Warning: Binding analysis failed for {row.get('title', 'unknown')}: {str(e)}")
+            enhanced_row['binding_analysis'] = {"error": str(e), "success": False}
+        
+        enhanced_results.append(enhanced_row)
+    
+    # Create enhanced DataFrame
+    enhanced_df = pd.DataFrame(enhanced_results)
+    
+    # Save binding analysis summary
+    try:
+        binding_summary_path = os.path.join(parent_path, 'binding_analysis_summary.json')
+        successful_analyses = [r for r in enhanced_results if r.get('binding_analysis', {}).get('success', False)]
+        
+        summary = {
+            "total_compounds": len(enhanced_results),
+            "successful_analyses": len(successful_analyses),
+            "analysis_success_rate": len(successful_analyses) / len(enhanced_results) if enhanced_results else 0,
+            "timestamp": pd.Timestamp.now().isoformat()
+        }
+        
+        with open(binding_summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+            
+        print(f"✅ Binding analysis completed: {len(successful_analyses)}/{len(enhanced_results)} successful")
+        
+    except Exception as e:
+        print(f"Warning: Could not save binding analysis summary: {e}")
+    
+    return enhanced_df
+
+
 def vina_docking_from_list(ligands: list,
                            receptor_pdbqt: str,
                            min_ph: float = 6.0,
@@ -583,6 +689,11 @@ def vina_docking_from_list(ligands: list,
     
     # 为每个结果添加protein路径信息
     dfRes['protein_path'] = str(receptPath)
+    
+    # Step 6.5: BINANA Binding Mode Analysis (if available and enabled)
+    if BINANA_AVAILABLE and BINANA_CONFIG.get("auto_analyze", True) and len(dfRes) > 0:
+        print(f"Running binding mode analysis for {len(dfRes)} docking results...")
+        dfRes = perform_binding_analysis(dfRes, str(receptPath), parent_path)
     
     dfRes.to_json(f"{parent_path}/dockRes.json", orient="records", force_ascii=False, indent=2)
 
