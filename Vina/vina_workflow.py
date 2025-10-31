@@ -33,16 +33,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Add BINANA analysis capabilities
 try:
-    # Add analysis module path 
-    analysis_path = current_dir / "analysis"
-    config_path = current_dir
+    # Add parent directory to path to enable proper module imports
+    parent_dir = current_dir.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
     
-    if str(analysis_path) not in sys.path:
-        sys.path.append(str(analysis_path))
-    if str(config_path) not in sys.path:
-        sys.path.append(str(config_path))
-    
-    from binana_analyzer import BindingAnalyzer
+    # Import using absolute import from analysis submodule
+    from analysis.binana_analyzer import BindingAnalyzer
     
     # Set default BINANA configuration
     BINANA_CONFIG = {
@@ -51,12 +48,14 @@ try:
         "timeout": 300,
         "binana_path": None,
         "save_intermediate_files": False,
-        "analysis_output_dir": "binding_analysis"
+        "analysis_output_dir": "docked/binding_analysis"  # 统一输出到docked目录下
     }
     BINANA_AVAILABLE = BINANA_CONFIG.get("enabled", False)
     print(f"BINANA analysis available: {BINANA_AVAILABLE}")
 except ImportError as e:
     print(f"Warning: BINANA analysis not available: {e}")
+    import traceback
+    traceback.print_exc()
     BINANA_AVAILABLE = False
     BINANA_CONFIG = {"enabled": False}
 
@@ -476,10 +475,19 @@ def combine_csv(file_paths):
     return combined_df
 
 def clean_intermediate_files(work_dir):
+    """
+    清理中间文件，保留对接结果和BINANA分析结果
+    """
     keep_files = {
         "70.csv",
         "dockRes.json",
         "protein_7UDP.pdbqt"
+    }
+    
+    # 保留docked目录（包含对接结果和binding_analysis）
+    keep_dirs = {
+        "docked",  # 对接结果和BINANA分析都在这里
+        "errors"   # 错误日志
     }
 
     paths_to_remove = [
@@ -510,6 +518,7 @@ def clean_intermediate_files(work_dir):
                 os.remove(f)
 
     print("✅ Intermediate files cleaned up.")
+    print(f"📁 Kept results in: {work_dir}/docked/ (including binding_analysis)")
 
 
 def perform_binding_analysis(dfRes: pd.DataFrame, receptor_path: str, parent_path: str) -> pd.DataFrame:
@@ -524,56 +533,103 @@ def perform_binding_analysis(dfRes: pd.DataFrame, receptor_path: str, parent_pat
     Returns:
         Enhanced DataFrame with binding analysis data
     """
-    if not BINANA_AVAILABLE:
-        print("Warning: BINANA not available, skipping binding analysis")
-        return dfRes
-        
-    analyzer = BindingAnalyzer(show_output=False)
-    
     # Create binding analysis results list
     enhanced_results = []
     
-    for idx, row in dfRes.iterrows():
-        enhanced_row = row.copy()
-        
+    if not BINANA_AVAILABLE:
+        print("Warning: BINANA not available, skipping binding analysis")
+        # Still create the summary file even if BINANA is not available
+        for idx, row in dfRes.iterrows():
+            enhanced_row = row.copy()
+            enhanced_row['binding_analysis'] = {
+                "error": "BINANA module not available",
+                "success": False
+            }
+            enhanced_results.append(enhanced_row)
+    else:
         try:
-            # Get ligand file path from docking results
-            ligand_file = row.get('file', '')
-            if not ligand_file or not os.path.exists(ligand_file):
-                print(f"Warning: Ligand file not found for {row.get('title', 'unknown')}: {ligand_file}")
-                enhanced_row['binding_analysis'] = {"error": "Ligand file not found", "success": False}
-            else:
-                # Run BINANA analysis
-                compound_id = row.get('title', f'compound_{idx}')
-                binana_output_dir = os.path.join(parent_path, 'binding_analysis', compound_id)
+            analyzer = BindingAnalyzer(show_output=False)
+            
+            for idx, row in dfRes.iterrows():
+                enhanced_row = row.copy()
                 
-                result = analyzer.analyze_docking_result(
-                    receptor_file=receptor_path,
-                    ligand_file=ligand_file,
-                    compound_id=compound_id,
-                    output_dir=binana_output_dir
-                )
+                try:
+                    # Get ligand file path from docking results
+                    # The 'file' column contains SDF filename, we need the PDBQT file
+                    compound_id = row.get('title', f'compound_{idx}')
+                    
+                    # Construct PDBQT file path: docked/{compound_id}.pdbqt
+                    ligand_pdbqt = os.path.join(parent_path, 'docked', f'{compound_id}.pdbqt')
+                    
+                    if not os.path.exists(ligand_pdbqt):
+                        print(f"Warning: Ligand PDBQT file not found for {compound_id}: {ligand_pdbqt}")
+                        enhanced_row['binding_analysis'] = {"error": "Ligand PDBQT file not found", "success": False}
+                    else:
+                        # Run BINANA analysis - 统一输出到docked目录下
+                        # 将BINANA结果输出到docked目录下的binding_analysis子目录
+                        binana_output_dir = os.path.join(parent_path, 'docked', 'binding_analysis', compound_id)
+                        
+                        result = analyzer.analyze_docking_result(
+                            receptor_file=receptor_path,
+                            ligand_file=ligand_pdbqt,
+                            compound_id=compound_id,
+                            output_dir=binana_output_dir
+                        )
+                        
+                        # 移动并重命名 binding_mode_summary.csv 文件
+                        if result.get('success', False):
+                            old_csv_path = os.path.join(binana_output_dir, 'binding_mode_summary.csv')
+                            if os.path.exists(old_csv_path):
+                                # 新的文件路径：直接放在 binding_analysis 目录下，文件名加上 compound_id 前缀
+                                new_csv_name = f"{compound_id}_binding_mode_summary.csv"
+                                new_csv_path = os.path.join(parent_path, 'docked', 'binding_analysis', new_csv_name)
+                                
+                                # 移动并重命名文件
+                                import shutil
+                                shutil.move(old_csv_path, new_csv_path)
+                                
+                                # 更新result中的文件路径
+                                if 'analysis_files' in result:
+                                    result['analysis_files']['binding_mode_summary'] = new_csv_path
+                        
+                        enhanced_row['binding_analysis'] = result
+                        
+                except Exception as e:
+                    print(f"Warning: Binding analysis failed for {row.get('title', 'unknown')}: {str(e)}")
+                    enhanced_row['binding_analysis'] = {"error": str(e), "success": False}
                 
-                enhanced_row['binding_analysis'] = result
-                
-        except Exception as e:
-            print(f"Warning: Binding analysis failed for {row.get('title', 'unknown')}: {str(e)}")
-            enhanced_row['binding_analysis'] = {"error": str(e), "success": False}
+                enhanced_results.append(enhanced_row)
         
-        enhanced_results.append(enhanced_row)
+        except Exception as e:
+            print(f"Error initializing BINANA analyzer: {e}")
+            # If analyzer initialization fails, mark all as failed
+            for idx, row in dfRes.iterrows():
+                enhanced_row = row.copy()
+                enhanced_row['binding_analysis'] = {
+                    "error": f"BINANA initialization failed: {str(e)}",
+                    "success": False
+                }
+                enhanced_results.append(enhanced_row)
     
     # Create enhanced DataFrame
     enhanced_df = pd.DataFrame(enhanced_results)
     
-    # Save binding analysis summary
+    # Save binding analysis summary - 统一输出到docked目录
+    # Always create the summary file, even if all analyses failed
     try:
-        binding_summary_path = os.path.join(parent_path, 'binding_analysis_summary.json')
+        # 确保docked目录存在
+        docked_dir = os.path.join(parent_path, 'docked')
+        os.makedirs(docked_dir, exist_ok=True)
+        
+        # 将summary保存到docked目录下
+        binding_summary_path = os.path.join(docked_dir, 'binding_analysis_summary.json')
         successful_analyses = [r for r in enhanced_results if r.get('binding_analysis', {}).get('success', False)]
         
         summary = {
             "total_compounds": len(enhanced_results),
             "successful_analyses": len(successful_analyses),
             "analysis_success_rate": len(successful_analyses) / len(enhanced_results) if enhanced_results else 0,
+            "binana_available": BINANA_AVAILABLE,
             "timestamp": pd.Timestamp.now().isoformat()
         }
         
@@ -581,9 +637,34 @@ def perform_binding_analysis(dfRes: pd.DataFrame, receptor_path: str, parent_pat
             json.dump(summary, f, indent=2)
             
         print(f"✅ Binding analysis completed: {len(successful_analyses)}/{len(enhanced_results)} successful")
+        print(f"📁 Binding analysis summary saved to: {binding_summary_path}")
+        
+        # 清理空的compound文件夹（因为CSV文件已经移动到上层目录）
+        binding_analysis_dir = os.path.join(docked_dir, 'binding_analysis')
+        if os.path.exists(binding_analysis_dir):
+            import shutil
+            for item in os.listdir(binding_analysis_dir):
+                item_path = os.path.join(binding_analysis_dir, item)
+                # 如果是文件夹，尝试删除（只删除空文件夹或只包含output.json的文件夹）
+                if os.path.isdir(item_path):
+                    try:
+                        # 如果文件夹为空，直接删除
+                        if not os.listdir(item_path):
+                            os.rmdir(item_path)
+                        else:
+                            # 如果文件夹中只有output.json等文件，也删除整个文件夹
+                            # 因为重要的binding_mode_summary.csv已经移动到上层
+                            shutil.rmtree(item_path)
+                    except Exception as e:
+                        print(f"Warning: Could not remove compound folder {item_path}: {e}")
+        
+        print(f"✅ Intermediate files cleaned up.")
+        print(f"📁 Kept results in: {docked_dir}/ (including binding_analysis)")
         
     except Exception as e:
         print(f"Warning: Could not save binding analysis summary: {e}")
+        import traceback
+        traceback.print_exc()
     
     return enhanced_df
 

@@ -26,12 +26,15 @@ from docking_task_processor import background_task_runner
 
 # 导入BINANA分析模块
 try:
-    sys.path.append(str(current_dir / "analysis"))
-    from binana_analyzer import BindingAnalyzer, analyze_binding_quick
-    from report_generator import ReportGenerator
+    # 使用正确的模块路径导入
+    from analysis.binana_analyzer import BindingAnalyzer, analyze_binding_quick
+    from analysis.report_generator import ReportGenerator
     BINANA_AVAILABLE = True
+    print(f"✅ BINANA analysis module loaded successfully")
 except ImportError as e:
     print(f"Warning: BINANA analysis not available: {e}")
+    import traceback
+    traceback.print_exc()
     BINANA_AVAILABLE = False
 
 # 设置日志系统
