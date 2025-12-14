@@ -90,11 +90,13 @@ class DockingTaskProcessor:
                 'protein_file': str(receptor_path),
                 'vina_box_file': str(vina_box_file),
                 'output_dir': str(output_dir),
-                'num_poses': config.get('n_poses', 10),
+                'n_poses': config.get('n_poses', 10),  # 使用n_poses保持一致性
                 'energy_range': config.get('energy_range', 3),
                 'exhaustiveness': config.get('exhaustiveness', 8),
                 'num_cpu': config.get('n_jobs', 1),
-                'seed': config.get('seed', 0)
+                'seed': config.get('seed', 0),
+                'min_ph': config.get('min_ph', 6.0),  # 添加min_ph
+                'max_ph': config.get('max_ph', 8.0)   # 添加max_ph
             }
             
             # 运行docking计算
@@ -225,7 +227,9 @@ class DockingTaskProcessor:
                     receptor_pdbqt=protein_file,
                     min_ph=params.get('min_ph', 6.0),
                     max_ph=params.get('max_ph', 8.0),
-                    n_jobs=params.get('num_cpu', 8)
+                    n_jobs=params.get('num_cpu', 8),
+                    exhaustiveness=params.get('exhaustiveness', 8),
+                    n_poses=params.get('n_poses', 10)
                 )
                 
                 # 将结果复制到指定的输出目录

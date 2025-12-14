@@ -320,7 +320,7 @@ def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='
     if len(pdbqt_files) == 0:
         raise RuntimeError("Failed to generate any PDBQT files for docking. This could be due to problematic input molecules or missing dependencies.")
 
-def vina_dock(lig, recpt='', center='', box_size=[20, 20, 20], dir='.'):
+def vina_dock(lig, recpt='', center='', box_size=[20, 20, 20], dir='.', exhaustiveness=8, n_poses=10):
     """
     执行分子对接
     """
@@ -405,10 +405,10 @@ def vina_dock(lig, recpt='', center='', box_size=[20, 20, 20], dir='.'):
             raise RuntimeError(f"Failed to compute vina maps for ligand: {lig}")
 
         # 执行对接 - 添加更多错误处理
-        print("Starting docking...")
+        print(f"Starting docking with exhaustiveness={exhaustiveness}, n_poses={n_poses}...")
         try:
-            # 使用较低的exhaustiveness来避免一些数值问题
-            v.dock(exhaustiveness=2, n_poses=10)
+            # 使用用户指定的参数
+            v.dock(exhaustiveness=exhaustiveness, n_poses=n_poses)
             print("Docking completed successfully")
         except Exception as e:
             print(f"Docking failed for {lig}: {e}")
@@ -673,7 +673,9 @@ def vina_docking_from_list(ligands: list,
                            receptor_pdbqt: str,
                            min_ph: float = 6.0,
                            max_ph: float = 8.0,
-                           n_jobs: int = 8) -> str:
+                           n_jobs: int = 8,
+                           exhaustiveness: int = 8,
+                           n_poses: int = 10) -> str:
     """
     新增接口：直接传递 ligands 列表（如：[{"smiles":"C=CCNC…","title":"ID1"}, {...}, …]），
     而不需要用户预先写 CSV。
@@ -746,10 +748,17 @@ def vina_docking_from_list(ligands: list,
     print(f"Found {len(pdbqtList)} PDBQT files for docking")
     random.shuffle(pdbqtList)
 
+    # 从配置中获取 box_size，如果不存在则使用默认值
+    box_size = centerDict.get('box_size', [20, 20, 20])
+    print(f"Using center: {centerDict['center']}, box_size: {box_size}")
+
     vina_dock_p = partial(vina_dock,
                           recpt=receptPath.as_posix(),
                           center=centerDict['center'],
-                          dir=parent_path)
+                          box_size=box_size,
+                          dir=parent_path,
+                          exhaustiveness=exhaustiveness,
+                          n_poses=n_poses)
     mapper(n_jobs)(vina_dock_p, pdbqtList)
 
     # Step 6: 合并所有单个 ligand 的 CSV，生成 dockRes.csv
