@@ -106,7 +106,7 @@ def pdbqt2sdf(pdbqtFile):
             'file': [f"{imol.name}-p{imol.pose_id}.sdf"]
         }
         df = pd.DataFrame.from_dict(resultDict)
-        df.to_csv(f'{pdbqtFile_path.parent}/{imol.name}-p{imol.pose_id}.csv', index=None)
+        df.to_csv(f'{pdbqtFile_path.parent}/{imol.name}-p{imol.pose_id}.csv', index=False)
         break  # 只输出 Top1 pose，然后跳出
 
 def csv2gypSmi(inputCsv, dir='.'):
@@ -124,11 +124,11 @@ def csv2gypSmi(inputCsv, dir='.'):
             sys.exit(0)
     if 'title' not in dfInput.columns:
         for idx, irow in dfInput.iterrows():
-            dfInput.loc[idx, 'title'] = f"ID-{idx}"
-    dfInput[['smiles', 'title']].to_csv(out_path, sep='\t', index=None)
+            dfInput.loc[idx, 'title'] = f"ID-{idx}"  # type: ignore[call-overload]
+    dfInput[['smiles', 'title']].to_csv(out_path, sep='\t', index=False)
     return out_path
 
-def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='.'):
+def smi2pdbqt(inputSmi, min_ph: float = 5.0, max_ph: float = 9.0, num_processors=os.cpu_count(), dir='.'):
     gypsum_output_dir = f"{dir}/gypsumFolder"
     if not os.path.exists(gypsum_output_dir):
         os.makedirs(gypsum_output_dir)  # 先手动创建，避免 Start.py 报错
@@ -189,9 +189,12 @@ def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='
         except Exception as e:
             print(f"Failed to recover from original SMILES: {e}")
             raise RuntimeError("No molecules could be processed by Gypsum-DL and recovery failed")
+    
+    if len(smiList) == 0:
+        raise RuntimeError("No valid molecules to process")
         
     dfSmi = pd.DataFrame(smiList, columns=['smiles', 'title'])
-    dfSmi.to_csv(f'{dir}/input_prepared.smi', sep='\t', index=None, header=None)
+    dfSmi.to_csv(f'{dir}/input_prepared.smi', sep='\t', index=False, header=False)
     
     # 改进的分子3D坐标生成和PDBQT转换过程
     print("Converting SMILES to 3D structures...")
@@ -235,7 +238,7 @@ def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='
                         
                         # 方法1: 标准ETKDG
                         try:
-                            if AllChem.EmbedMolecule(mol, AllChem.ETKDG()) == 0:
+                            if AllChem.EmbedMolecule(mol, AllChem.ETKDG()) == 0:  # type: ignore[attr-defined]
                                 embed_success = True
                         except:
                             pass
@@ -243,9 +246,9 @@ def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='
                         # 方法2: 使用不同的随机种子
                         if not embed_success:
                             try:
-                                params = AllChem.ETKDG()
+                                params = AllChem.ETKDG()  # type: ignore[attr-defined]
                                 params.randomSeed = 42
-                                if AllChem.EmbedMolecule(mol, params) == 0:
+                                if AllChem.EmbedMolecule(mol, params) == 0:  # type: ignore[attr-defined]
                                     embed_success = True
                             except:
                                 pass
@@ -253,7 +256,7 @@ def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='
                         # 方法3: 使用基本距离几何
                         if not embed_success:
                             try:
-                                if AllChem.EmbedMolecule(mol, randomSeed=42) == 0:
+                                if AllChem.EmbedMolecule(mol, randomSeed=42) == 0:  # type: ignore[attr-defined]
                                     embed_success = True
                             except:
                                 pass
@@ -261,7 +264,7 @@ def smi2pdbqt(inputSmi, min_ph=5, max_ph=9, num_processors=os.cpu_count(), dir='
                         if embed_success:
                             # 优化分子几何
                             try:
-                                AllChem.OptimizeMolecule(mol, maxIters=200)
+                                AllChem.OptimizeMolecule(mol, maxIters=200)  # type: ignore[attr-defined]
                             except:
                                 pass  # 优化失败也继续
                             
@@ -548,7 +551,7 @@ def perform_binding_analysis(dfRes: pd.DataFrame, receptor_path: str, parent_pat
             enhanced_results.append(enhanced_row)
     else:
         try:
-            analyzer = BindingAnalyzer(show_output=False)
+            analyzer = BindingAnalyzer(show_output=False)  # type: ignore[possibly-unbound]
             
             for idx, row in dfRes.iterrows():
                 enhanced_row = row.copy()
@@ -722,7 +725,7 @@ def vina_docking_from_list(ligands: list,
         raise ValueError("输入的 CSV 必须包含 'smiles' 列。")
     if 'title' not in dfInput.columns:
         for idx, irow in dfInput.iterrows():
-            dfInput.loc[idx, 'title'] = f'ID_{idx}'
+            dfInput.loc[idx, 'title'] = f'ID_{idx}'  # type: ignore[call-overload]
 
     # Step 3: 组装 ligand（CSV → input.smi → input_prepared.sdf → .pdbqt）
     smi_path = csv2gypSmi(inputPath, dir=parent_path)
