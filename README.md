@@ -1,6 +1,6 @@
 # DockingVinaApp
 
-基于AutoDock Vina的分子对接应用，仿照peptide_opt的设计模式，从数据库获取任务参数并执行docking计算。
+基于AutoDock Vina的分子对接应用，仿照peptide_opt的设计模式，从数据库获取任务参数并执行docking计算。需要下载gypsum_dl和binana
 
 ## 功能特点
 

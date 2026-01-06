@@ -674,21 +674,37 @@ def perform_binding_analysis(dfRes: pd.DataFrame, receptor_path: str, parent_pat
 
 def vina_docking_from_list(ligands: list,
                            receptor_pdbqt: str,
+                           vina_box_config: dict = None,
                            min_ph: float = 6.0,
                            max_ph: float = 8.0,
                            n_jobs: int = 8,
                            exhaustiveness: int = 8,
                            n_poses: int = 10) -> str:
     """
-    新增接口：直接传递 ligands 列表（如：[{"smiles":"C=CCNC…","title":"ID1"}, {...}, …]），
-    而不需要用户预先写 CSV。
-    内部会自动生成一次 CSV 放到 run_dir 下
-    返回 run_dir（字符串）。
+    分子对接接口：直接传递 ligands 列表和 vina_box 配置。
+    
+    Args:
+        ligands: 分子列表，如：[{"smiles":"C=CCNC…","title":"ID1"}, {...}, …]
+        receptor_pdbqt: 受体 PDBQT 文件路径
+        vina_box_config: Vina box 配置字典，必须包含 'center' 和 'box_size'
+        min_ph: 最小 pH 值
+        max_ph: 最大 pH 值
+        n_jobs: 并行任务数
+        exhaustiveness: Vina exhaustiveness 参数
+        n_poses: 生成的构象数
+        
+    Returns:
+        run_dir 路径（字符串）
     """
+    if vina_box_config is None:
+        raise ValueError("vina_box_config 参数必须提供，包含 'center' 和 'box_size'")
+    
+    if 'center' not in vina_box_config:
+        raise ValueError("vina_box_config 必须包含 'center' 键")
+    
     orig_cwd = os.getcwd()
-    # 1. 使用 ligands 列表和 receptor_pdbqt 构建 run_dir
-    # receptor_pdbqt 是一个文件路径字符串，必须存在
-    inputPath_dummy = None  # 这里只用来占位，不做文件读取
+    
+    # 1. 验证 receptor 文件
     receptPath = Path(receptor_pdbqt).absolute()
     if not receptPath.exists():
         raise FileNotFoundError(f"受体 PDBQT 文件不存在: {receptPath}")
@@ -697,25 +713,21 @@ def vina_docking_from_list(ligands: list,
     if not isinstance(ligands, list) or any(('smiles' not in mol or 'title' not in mol) for mol in ligands):
         raise ValueError("ligands 参数必须是 list，且每个元素含 'smiles' 和 'title'。")
 
-    # 找到 ligands 所属“资源目录”，我们约定它是 receptor_pdbqt 所在目录的同级 resources
-    # 也可以直接用 receptor_pdbqt.parent 作为资源根
-    orig_parent = receptPath.parent   # e.g. /home/davis/projects/dockingVina/resource
+    # 使用 receptor 所在目录作为工作根目录
+    orig_parent = receptPath.parent
 
     # 2. 生成随机 UUID，并创建 run_dir
     run_id = uuid.uuid4().hex
     run_dir = orig_parent / run_id
     os.makedirs(run_dir, exist_ok=True)
 
-    # 3. 在 run_dir 下写一次 CSV：文件名可以固定为 "input.csv"
+    # 3. 在 run_dir 下写入配体 CSV
     csv_path = run_dir / "input.csv"
-    df_lig = pd.DataFrame(ligands)  # 直接把 list of dict 转成 DataFrame
-    # DataFrame 会自动按 {'smiles','title'} 两列写文件
+    df_lig = pd.DataFrame(ligands)
     df_lig.to_csv(csv_path, index=False)
 
-    # 4. 把当前 cwd 切换到 run_dir
+    # 4. 切换到 run_dir
     os.chdir(run_dir)
-
-    # 已有： inputPath = csv_path
     inputPath = csv_path
     parent_path = str(run_dir)
 
@@ -735,13 +747,8 @@ def vina_docking_from_list(ligands: list,
               num_processors=n_jobs,
               dir=parent_path)
 
-    # Step 4: 读取 receptor 同级目录下的 vina_box.json
-    DEFAULT_ROOT = Path(__file__).resolve().parent.parent  # Vina/ 下往上两级到项目根
-    box_json = DEFAULT_ROOT / "resource" / "vina_box.json"
-    if not box_json.exists():
-        raise FileNotFoundError(f"未找到 {box_json}，请确认在受体文件同级目录下有 vina_box.json。")
-    with open(box_json, "r") as infile:
-        centerDict = json.load(infile)
+    # Step 4: 使用传入的 vina_box_config
+    centerDict = vina_box_config
 
     # Step 5: 并行调用 Vina 对所有 .pdbqt 做 docking
     pdbqtList = glob(f"{parent_path}/pdbqts/*.pdbqt")

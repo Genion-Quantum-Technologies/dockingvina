@@ -18,7 +18,8 @@ from .dockingvina_integration import (
     analyze_binding_quick,
     get_interaction_summary,
     find_key_residues,
-    batch_analyze_docking_results
+    batch_analyze_docking_results,
+    BINANA_AVAILABLE
 )
 
 
@@ -42,5 +43,6 @@ __all__ = [
     'analyze_binding_quick',
     'get_interaction_summary',
     'find_key_residues',
-    'batch_analyze_docking_results'
+    'batch_analyze_docking_results',
+    'BINANA_AVAILABLE'
 ]

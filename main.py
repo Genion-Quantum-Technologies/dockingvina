@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 FastAPI wrapper for Docking Pipeline
+使用 SeaweedFS 对象存储
 """
 
 import os
@@ -21,6 +22,8 @@ current_dir = Path(__file__).parent.absolute()
 sys.path.append(str(current_dir))
 
 from config.logging_config import setup_logging, get_log_file_path
+from config import storage as storage_config
+from services.storage import get_storage
 from async_task_processor import AsyncTaskProcessor
 from docking_task_processor import background_task_runner
 
@@ -159,16 +162,17 @@ async def status():
 
 @app.post("/analyze_binding")
 async def analyze_binding_mode(
-    receptor_file: str,
-    ligand_file: str,
+    receptor_storage_key: str,
+    ligand_storage_key: str,
     compound_id: Optional[str] = None
 ):
     """
     Analyze binding mode between receptor and ligand using BINANA.
+    文件从 SeaweedFS 下载。
     
     Args:
-        receptor_file: Path to receptor PDBQT file
-        ligand_file: Path to ligand PDBQT file  
+        receptor_storage_key: SeaweedFS 中的受体文件路径
+        ligand_storage_key: SeaweedFS 中的配体文件路径
         compound_id: Optional identifier for the compound
     
     Returns:
@@ -178,33 +182,49 @@ async def analyze_binding_mode(
         raise HTTPException(status_code=503, detail="BINANA analysis not available")
     
     try:
-        # Validate file paths
-        if not os.path.exists(receptor_file):
-            raise HTTPException(status_code=404, detail=f"Receptor file not found: {receptor_file}")
-        if not os.path.exists(ligand_file):
-            raise HTTPException(status_code=404, detail=f"Ligand file not found: {ligand_file}")
+        storage = get_storage()
+        
+        # 创建临时目录
+        storage_config.ensure_temp_dir()
+        temp_dir = storage_config.temp_dir / (compound_id or "analysis")
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 从 SeaweedFS 下载文件
+        receptor_file = temp_dir / "receptor.pdbqt"
+        ligand_file = temp_dir / "ligand.pdbqt"
+        
+        await storage.download_file(receptor_storage_key, receptor_file)
+        await storage.download_file(ligand_storage_key, ligand_file)
         
         # Run analysis
         if 'analyze_binding_quick' not in globals():
             raise HTTPException(status_code=503, detail="BINANA analysis functions not available")
-        result = analyze_binding_quick(receptor_file, ligand_file, compound_id)
+        result = analyze_binding_quick(str(receptor_file), str(ligand_file), compound_id)
+        
+        # 清理临时文件
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
         
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=f"Analysis failed: {result.get('error', 'Unknown error')}")
         
         return result
         
+    except FileNotFoundError as e:
+        logger.error(f"File not found in SeaweedFS: {str(e)}")
+        raise HTTPException(status_code=404, detail=f"File not found: {str(e)}")
     except Exception as e:
         logger.error(f"Binding analysis error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-@app.get("/analyze_docking_results/{run_id}")
-async def analyze_docking_results(run_id: str):
+@app.get("/analyze_docking_results/{task_id}")
+async def analyze_docking_results(task_id: str):
     """
     Analyze binding modes for all results from a docking run.
+    从 SeaweedFS 读取对接结果。
     
     Args:
-        run_id: The UUID of the docking run
+        task_id: 任务 ID
         
     Returns:
         Enhanced docking results with binding analysis for each compound
@@ -213,17 +233,21 @@ async def analyze_docking_results(run_id: str):
         raise HTTPException(status_code=503, detail="BINANA analysis not available")
     
     try:
-        # Look for docking results in resource directory
-        resource_dir = Path("/home/davis/projects/dockingvina/resource")
-        run_dir = resource_dir / run_id
+        storage = get_storage()
         
-        if not run_dir.exists():
-            raise HTTPException(status_code=404, detail=f"Docking run not found: {run_id}")
+        # 创建临时目录
+        storage_config.ensure_temp_dir()
+        temp_dir = storage_config.temp_dir / task_id
+        temp_dir.mkdir(parents=True, exist_ok=True)
         
-        # Check if results already have binding analysis
-        results_file = run_dir / "dockRes.json"
-        if not results_file.exists():
-            raise HTTPException(status_code=404, detail=f"Docking results not found in run: {run_id}")
+        # 从 SeaweedFS 下载对接结果
+        results_key = f"jobs/docking/{task_id}/output/dockRes.json"
+        results_file = temp_dir / "dockRes.json"
+        
+        try:
+            await storage.download_file(results_key, results_file)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Docking results not found for task: {task_id}")
         
         # Load existing results
         with open(results_file, 'r') as f:
@@ -231,22 +255,24 @@ async def analyze_docking_results(run_id: str):
         
         # Check if binding analysis already exists
         if results and 'binding_analysis' in results[0]:
-            logger.info(f"Binding analysis already exists for run {run_id}")
+            logger.info(f"Binding analysis already exists for task {task_id}")
+            # 清理临时目录
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return {
-                "run_id": run_id,
+                "task_id": task_id,
                 "results": results,
                 "analysis_status": "existing"
             }
         
-        # Find receptor file
-        receptor_file = None
-        for result in results:
-            if 'protein_path' in result:
-                receptor_file = result['protein_path']
-                break
+        # 下载受体文件
+        receptor_key = f"jobs/docking/{task_id}/input/receptor.pdbqt"
+        receptor_file = temp_dir / "receptor.pdbqt"
         
-        if not receptor_file or not os.path.exists(receptor_file):
-            raise HTTPException(status_code=404, detail="Receptor file not found in results")
+        try:
+            await storage.download_file(receptor_key, receptor_file)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Receptor file not found in task")
         
         # Run binding analysis for each result
         if 'BindingAnalyzer' not in globals():
@@ -257,25 +283,39 @@ async def analyze_docking_results(run_id: str):
         for result in results:
             enhanced_result = result.copy()
             
-            ligand_file = result.get('file', '')
-            if ligand_file and os.path.exists(ligand_file):
-                compound_id = result.get('title', 'unknown')
+            compound_id = result.get('title', 'unknown')
+            # 下载配体文件
+            ligand_key = f"jobs/docking/{task_id}/output/docked/{compound_id}.pdbqt"
+            ligand_file = temp_dir / f"{compound_id}.pdbqt"
+            
+            try:
+                await storage.download_file(ligand_key, ligand_file)
+                
+                analysis_output_dir = temp_dir / 'binding_analysis' / compound_id
+                analysis_output_dir.mkdir(parents=True, exist_ok=True)
+                
                 analysis_result = analyzer.analyze_docking_result(
-                    receptor_file=receptor_file,
-                    ligand_file=ligand_file,
+                    receptor_file=str(receptor_file),
+                    ligand_file=str(ligand_file),
                     compound_id=compound_id,
-                    output_dir=str(run_dir / 'binding_analysis' / compound_id)
+                    output_dir=str(analysis_output_dir)
                 )
                 enhanced_result['binding_analysis'] = analysis_result
-            else:
+            except FileNotFoundError:
                 enhanced_result['binding_analysis'] = {"error": "Ligand file not found", "success": False}
+            except Exception as e:
+                enhanced_result['binding_analysis'] = {"error": str(e), "success": False}
             
             enhanced_results.append(enhanced_result)
         
-        # Save enhanced results
-        enhanced_file = run_dir / "dockRes_with_binding.json"
+        # Save enhanced results locally
+        enhanced_file = temp_dir / "dockRes_with_binding.json"
         with open(enhanced_file, 'w') as f:
             json.dump(enhanced_results, f, indent=2)
+        
+        # 上传增强结果到 SeaweedFS
+        enhanced_key = f"jobs/docking/{task_id}/output/dockRes_with_binding.json"
+        await storage.upload_file(enhanced_file, enhanced_key)
         
         # Generate summary
         if 'ReportGenerator' not in globals():
@@ -283,39 +323,48 @@ async def analyze_docking_results(run_id: str):
         else:
             summary = ReportGenerator.create_analysis_summary(enhanced_results)
         
+        # 清理临时目录
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
         return {
-            "run_id": run_id,
+            "task_id": task_id,
             "results": enhanced_results,
             "summary": summary,
             "analysis_status": "completed"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Docking results analysis error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-@app.get("/binding_analysis_summary/{run_id}")
-async def get_binding_analysis_summary(run_id: str):
-    """Get summary of binding analysis for a docking run."""
+@app.get("/binding_analysis_summary/{task_id}")
+async def get_binding_analysis_summary(task_id: str):
+    """Get summary of binding analysis for a docking run from SeaweedFS."""
     if not BINANA_AVAILABLE:
         raise HTTPException(status_code=503, detail="BINANA analysis not available")
     
     try:
-        resource_dir = Path("/home/davis/projects/dockingvina/resource")
-        run_dir = resource_dir / run_id
-        summary_file = run_dir / "binding_analysis_summary.json"
+        storage = get_storage()
         
-        if not summary_file.exists():
-            raise HTTPException(status_code=404, detail=f"Binding analysis summary not found for run: {run_id}")
+        # 从 SeaweedFS 下载 summary
+        summary_key = f"jobs/docking/{task_id}/output/binding_analysis_summary.json"
         
-        with open(summary_file, 'r') as f:
-            summary = json.load(f)
+        try:
+            summary_bytes = await storage.download_bytes(summary_key)
+            summary = json.loads(summary_bytes.decode('utf-8'))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail=f"Binding analysis summary not found for task: {task_id}")
         
         return {
-            "run_id": run_id,
+            "task_id": task_id,
             "summary": summary
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Summary retrieval error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve summary: {str(e)}")

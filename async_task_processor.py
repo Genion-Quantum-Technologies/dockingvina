@@ -1,6 +1,7 @@
 """
 分子对接异步任务处理器
 支持并发处理和进度更新
+支持 SeaweedFS 对象存储
 """
 
 import asyncio
@@ -8,12 +9,15 @@ import logging
 import json
 import time
 import os
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from database.db import get_db_connection
 from Vina.vina_workflow import vina_docking_from_list
+from services.storage import get_storage
+from config import storage as storage_config
 
 logger = logging.getLogger("async_task_processor")
 
@@ -65,8 +69,9 @@ class AsyncTaskProcessor:
         logger.info("AsyncTaskProcessor initialized with %d workers", max_workers)
     
     async def process_docking_task(self, task_id: str, job_dir: str):
-        """处理分子对接任务"""
+        """处理分子对接任务（使用 SeaweedFS 存储）"""
         connection = None
+        temp_job_dir = None
         try:
             # 获取数据库连接
             connection = await get_db_connection()
@@ -82,23 +87,33 @@ class AsyncTaskProcessor:
             # 保存当前工作目录
             original_cwd = os.getcwd()
             
+            # 获取存储服务
+            storage = get_storage()
+            
+            # 创建临时目录
+            storage_config.ensure_temp_dir()
+            temp_job_dir = storage_config.temp_dir / task_id
+            temp_job_dir.mkdir(parents=True, exist_ok=True)
+            temp_input_dir = temp_job_dir / "input"
+            temp_input_dir.mkdir(exist_ok=True)
+            
             try:
                 # 切换到dockingvina目录
                 os.chdir(self.current_dir)
                 
-                # 读取任务配置文件
-                job_path = Path(job_dir)
-                input_dir = job_path / "input"
-                config_file = input_dir / "input.json"
+                # 从 SeaweedFS 下载输入文件
+                await progress_callback.update_progress(5, "Downloading input files from storage")
                 
-                if not config_file.exists():
-                    raise FileNotFoundError(f"Configuration file not found: {config_file}")
+                remote_config_key = f"jobs/docking/{task_id}/input/input.json"
+                local_config_file = temp_input_dir / "input.json"
+                
+                await storage.download_file(remote_config_key, local_config_file)
                 
                 # 验证输入文件
                 await progress_callback.update_progress(10, "Validating input files")
                 
                 # 解析配置文件
-                with open(config_file, 'r') as f:
+                with open(local_config_file, 'r') as f:
                     config = json.load(f)
                 
                 logger.info(f"Task configuration: {config}")
@@ -109,8 +124,23 @@ class AsyncTaskProcessor:
                     if key not in config:
                         raise ValueError(f"Missing required configuration: {key}")
                 
+                # 下载 receptor 文件
+                receptor_storage_key = config.get('receptor_storage_key')
+                receptor_local = temp_input_dir / "receptor.pdbqt"
+                
+                if receptor_storage_key:
+                    await storage.download_file(receptor_storage_key, receptor_local)
+                    logger.info(f"Downloaded receptor from: {receptor_storage_key}")
+                else:
+                    # 从默认路径下载
+                    receptor_key = f"jobs/docking/{task_id}/input/receptor.pdbqt"
+                    await storage.download_file(receptor_key, receptor_local)
+                    logger.info(f"Downloaded receptor from: {receptor_key}")
+                
+                config['receptor_path'] = str(receptor_local)
+                
                 # 设置输出目录
-                output_dir = job_path / "output"
+                output_dir = temp_job_dir / "output"
                 output_dir.mkdir(exist_ok=True)
                 config['output_dir'] = str(output_dir)
                 
@@ -124,6 +154,16 @@ class AsyncTaskProcessor:
                     config,
                     progress_callback
                 )
+                
+                await progress_callback.update_progress(80, "Uploading results to storage")
+                
+                # 上传结果到 SeaweedFS
+                for result_file in output_dir.rglob("*"):
+                    if result_file.is_file():
+                        relative_path = result_file.relative_to(output_dir)
+                        remote_key = f"jobs/docking/{task_id}/output/{relative_path}"
+                        await storage.upload_file(result_file, remote_key)
+                        logger.info(f"Uploaded result: {remote_key}")
                 
                 await progress_callback.update_progress(90, "Finalizing results")
                 
@@ -162,6 +202,14 @@ class AsyncTaskProcessor:
         finally:
             if connection:
                 connection.close()
+            
+            # 清理临时目录
+            if temp_job_dir and temp_job_dir.exists():
+                try:
+                    shutil.rmtree(temp_job_dir, ignore_errors=True)
+                    logger.info(f"Cleaned up temp directory: {temp_job_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temp directory: {e}")
             
             # 从活动任务中移除
             if task_id in self.active_tasks:

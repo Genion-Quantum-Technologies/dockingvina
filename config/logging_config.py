@@ -2,6 +2,7 @@
 日志配置模块 - Docking Vina
 """
 
+import os
 import logging
 import sys
 from datetime import datetime
@@ -61,7 +62,7 @@ def setup_logging(level: str = "INFO", log_file: str = None):
 
 
 def get_log_file_path():
-    """获取默认日志文件路径"""
-    log_dir = Path("/home/davis/projects/serverlogs")
+    """获取默认日志文件路径（从环境变量读取）"""
+    log_dir = Path(os.getenv("LOG_DIR", "/tmp/dockingvina/logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
     return str(log_dir / "dockingvina.log")

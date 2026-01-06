@@ -9,9 +9,57 @@ and integration with the docking workflow.
 """
 
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
-from .binana_toolkit.binding_analyzer import BindingAnalyzer as BaseBindingAnalyzer
+
+# BINANA 导入 - 支持多种安装方式
+BINANA_AVAILABLE = False
+BaseBindingAnalyzer = None
+
+def _import_binana():
+    """尝试多种方式导入 BINANA BindingAnalyzer"""
+    global BINANA_AVAILABLE, BaseBindingAnalyzer
+    
+    # 方式 1: 作为已安装的 binana 包导入 (pip install)
+    try:
+        from binana.binding_analyzer import BindingAnalyzer as _BaseAnalyzer
+        BINANA_AVAILABLE = True
+        return _BaseAnalyzer
+    except ImportError:
+        pass
+    
+    # 方式 2: 从环境变量指定的路径导入
+    binana_project_path = os.environ.get("BINANA_PROJECT_PATH")
+    if binana_project_path and os.path.isdir(binana_project_path):
+        if binana_project_path not in sys.path:
+            sys.path.insert(0, binana_project_path)
+        try:
+            from binding_analyzer import BindingAnalyzer as _BaseAnalyzer
+            BINANA_AVAILABLE = True
+            return _BaseAnalyzer
+        except ImportError:
+            pass
+    
+    # 方式 3: 从 binana_toolkit 子目录导入 (符号链接或复制)
+    try:
+        from .binana_toolkit.binding_analyzer import BindingAnalyzer as _BaseAnalyzer
+        BINANA_AVAILABLE = True
+        return _BaseAnalyzer
+    except ImportError:
+        pass
+    
+    return None
+
+BaseBindingAnalyzer = _import_binana()
+
+if not BINANA_AVAILABLE:
+    raise ImportError(
+        "BINANA module not found. Please install it using one of these methods:\n"
+        "  1. pip install -e /path/to/binana  (recommended for Docker)\n"
+        "  2. Set BINANA_PROJECT_PATH environment variable\n"
+        "  3. Create symlink: ln -s /path/to/binana analysis/binana_toolkit"
+    )
 
 
 class DockingVinaBindingAnalyzer(BaseBindingAnalyzer):
@@ -42,27 +90,42 @@ class DockingVinaBindingAnalyzer(BaseBindingAnalyzer):
         Auto-detect BINANA installation with DockingVina-specific priority.
         
         优先级顺序：
-        1. 内置 binana_toolkit (生产环境)
-        2. 外部开发版本 (开发环境)
+        1. 环境变量指定的 BINANA_PATH
+        2. binana 包安装路径
+        3. binana_toolkit 子目录
         """
-        # Priority 1: Use bundled BINANA toolkit within dockingvina
+        # Priority 0: Check environment variable
+        env_binana_path = os.getenv("BINANA_PATH")
+        if env_binana_path and os.path.exists(env_binana_path):
+            return env_binana_path
+        
+        # Priority 1: Try to find from installed binana package
+        try:
+            import binana
+            binana_dir = Path(binana.__file__).parent
+            binana_script = binana_dir / "python" / "run_binana.py"
+            if binana_script.exists():
+                return str(binana_script)
+        except ImportError:
+            pass
+        
+        # Priority 2: Check BINANA_PROJECT_PATH environment variable
+        binana_project_path = os.environ.get("BINANA_PROJECT_PATH")
+        if binana_project_path:
+            binana_script = Path(binana_project_path) / "python" / "run_binana.py"
+            if binana_script.exists():
+                return str(binana_script)
+        
+        # Priority 3: Use bundled BINANA toolkit within dockingvina
         bundled_path = Path(__file__).parent / "binana_toolkit" / "python" / "run_binana.py"
         if bundled_path.exists():
             return str(bundled_path)
         
-        # Priority 2: Look for external BINANA installations (for development)
-        possible_paths = [
-            "/home/davis/projects/binana/python/run_binana.py",
-            "/home/davis/projects/BINANA/python/run_binana.py",
-        ]
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                return path
-        
         raise FileNotFoundError(
-            "Could not find BINANA installation. Please ensure binana_toolkit is installed "
-            "in the analysis directory or specify binana_path parameter."
+            "Could not find BINANA run_binana.py. Please ensure:\n"
+            "  1. Set BINANA_PATH environment variable to run_binana.py path, or\n"
+            "  2. pip install -e /path/to/binana, or\n"
+            "  3. Set BINANA_PROJECT_PATH to binana project directory"
         )
     
     def analyze_docking_result(self, 
