@@ -1,31 +1,169 @@
-# DockingVinaApp
+# DockingVina
 
-基于AutoDock Vina的分子对接应用，仿照peptide_opt的设计模式，从数据库获取任务参数并执行docking计算。需要下载gypsum_dl和binana
+基于 AutoDock Vina 的分子对接服务，提供 FastAPI REST API 接口，支持数据库任务管理和 BINANA 结合分析。
 
 ## 功能特点
 
-- **数据库驱动**: 从MySQL数据库tasks表获取待处理的docking任务
-- **异步处理**: 使用FastAPI + asyncio实现异步任务处理
-- **自动化流程**: 自动处理从SMILES到docking结果的完整流程
-- **结果管理**: 结构化保存docking结果到指定目录
+- **数据库驱动**: 从 PostgreSQL 数据库 tasks 表获取待处理的 docking 任务
+- **异步处理**: 使用 FastAPI + asyncio 实现高效的异步任务处理
+- **对象存储**: 集成 SeaweedFS 进行文件存储管理
+- **BINANA 分析**: 自动分析对接结果的结合模式和相互作用
+- **现代项目结构**: 遵循 Python 项目最佳实践 (src-layout, pyproject.toml)
 
-## 架构设计
+## 项目结构
 
 ```
-dockingVinaApp/
-├── main.py                    # FastAPI主应用
-├── docking_task_processor.py  # 任务处理器
-├── config.py                  # 配置文件
-├── database/                  # 数据库模块
-│   ├── __init__.py
-│   ├── config.py              # 数据库配置
-│   └── db.py                  # 数据库操作
-├── Vina/                      # Vina相关模块
-│   └── vina_workflow.py       # Vina工作流
-├── models/                    # 数据模型
-├── resource/                  # 资源文件
-└── gypsum_dl/                 # Gypsum-DL模块
+dockingvina/
+├── pyproject.toml              # 项目配置和依赖管理
+├── README.md                   # 项目文档
+├── .env.example               # 环境变量示例
+│
+├── src/
+│   └── dockingvina/           # 主包 (src-layout)
+│       ├── __init__.py        # 包初始化
+│       ├── __main__.py        # CLI 入口点
+│       ├── app.py             # FastAPI 应用
+│       │
+│       ├── core/              # 核心业务逻辑
+│       │   ├── task_processor.py    # 任务处理器
+│       │   ├── async_processor.py   # 异步任务处理
+│       │   └── vina_workflow.py     # Vina 工作流
+│       │
+│       ├── config/            # 配置模块
+│       │   ├── settings.py    # 应用配置
+│       │   ├── storage.py     # 存储配置
+│       │   └── logging_config.py
+│       │
+│       ├── database/          # 数据库模块
+│       │   ├── config.py      # 数据库配置
+│       │   └── db.py          # 连接池管理
+│       │
+│       ├── services/          # 外部服务集成
+│       │   └── storage/       # SeaweedFS 存储
+│       │
+│       ├── analysis/          # BINANA 分析模块
+│       │
+│       └── models/            # 数据模型
+│
+├── tests/                     # 测试套件
+│   ├── conftest.py           # Pytest fixtures
+│   ├── test_app.py           # API 测试
+│   ├── test_task_processor.py
+│   └── test_storage.py
+│
+├── Vina/                      # Vina 工作流实现 (legacy)
+├── analysis/                  # BINANA 分析实现 (legacy)
+├── vendor/                    # 第三方代码
+│   └── gypsum_dl/            # Gypsum-DL 分子准备
+│
+├── docker/                    # Docker 配置
+├── scripts/                   # 部署脚本
+├── docs/                      # 文档
+└── resource/                  # 资源文件
 ```
+
+## 快速开始
+
+### 安装
+
+#### 使用 pip (推荐用于开发)
+
+```bash
+# 克隆仓库
+git clone <repository-url>
+cd dockingvina
+
+# 创建虚拟环境
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# .venv\Scripts\activate  # Windows
+
+# 安装为可编辑模式
+pip install -e ".[dev]"
+```
+
+#### 使用 Conda (推荐用于科学计算依赖)
+
+```bash
+# 创建 conda 环境
+conda env create -f env.yml
+conda activate dockingvina
+
+# 安装包
+pip install -e .
+```
+
+### 配置
+
+1. 复制环境变量模板：
+```bash
+cp .env.example .env
+```
+
+2. 编辑 `.env` 文件配置：
+```env
+# 数据库配置
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_USER=admin
+DB_PASSWORD=secret
+DB_NAME=mydatabase
+
+# SeaweedFS 配置
+SEAWEED_FILER_ENDPOINT=http://localhost:8888
+SEAWEED_BUCKET=astramolecula
+
+# 任务配置
+MAX_CONCURRENT_TASKS=3
+DOCKING_NUM_CPU=8
+```
+
+### 运行
+
+#### 方式 1: 使用命令行
+
+```bash
+# 基本启动
+dockingvina
+
+# 指定参数
+dockingvina --host 0.0.0.0 --port 8002 --log-level debug
+
+# 开发模式 (热重载)
+dockingvina --reload
+```
+
+#### 方式 2: 作为 Python 模块
+
+```bash
+python -m dockingvina --host 0.0.0.0 --port 8002
+```
+
+#### 方式 3: 直接运行应用
+
+```bash
+uvicorn dockingvina.app:app --host 0.0.0.0 --port 8002
+```
+
+## API 接口
+
+### 基础端点
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/` | GET | API 根路径，返回服务状态 |
+| `/health` | GET | 健康检查 |
+| `/status` | GET | 获取服务详细状态 |
+| `/docs` | GET | Swagger API 文档 |
+| `/redoc` | GET | ReDoc API 文档 |
+
+### 分析端点
+
+| 端点 | 方法 | 描述 |
+|------|------|------|
+| `/analyze_binding` | POST | 分析受体-配体结合模式 |
+| `/analyze_docking_results/{task_id}` | GET | 分析对接任务的所有结果 |
+| `/binding_analysis_summary/{task_id}` | GET | 获取结合分析摘要 |
 
 ## 数据库任务格式
 
@@ -36,101 +174,93 @@ FROM tasks
 WHERE status = 'pending' AND task_type = 'docking'
 ```
 
-### 任务配置文件
-在`job_dir`目录下需要包含：
-
-1. **输入目录** (`input/`):
-   - `input.csv`: SMILES分子文件，包含`smiles`和`title`列
-   - `protein.pdbqt`: 蛋白质受体文件
-   - `vina_box.json`: 对接盒子配置
-
-2. **配置文件** (`docking_config.json`):
+### 输入配置文件 (`input.json`)
 ```json
 {
-    "smiles_file": "input.csv",
-    "protein_file": "protein.pdbqt", 
-    "vina_box_file": "vina_box.json",
-    "num_poses": 10,
-    "energy_range": 3,
+    "ligands": [
+        {"smiles": "CCO", "title": "ethanol"},
+        {"smiles": "CC(=O)O", "title": "acetic_acid"}
+    ],
+    "receptor_pdbqt": "receptor.pdbqt",
+    "center_x": 0.0,
+    "center_y": 0.0,
+    "center_z": 0.0,
+    "box_size_x": 20.0,
+    "box_size_y": 20.0,
+    "box_size_z": 20.0,
     "exhaustiveness": 8,
-    "num_cpu": 8,
-    "seed": 0,
-    "min_ph": 6.0,
-    "max_ph": 8.0
+    "n_poses": 10
 }
 ```
 
-3. **输出目录** (`output/`):
-   - 自动创建，保存docking结果
+## 开发
 
-## 使用方法
+### 运行测试
 
-### 1. 安装依赖
 ```bash
-pip install -r requirements.txt
+# 运行所有测试
+pytest
+
+# 带覆盖率报告
+pytest --cov=src/dockingvina --cov-report=html
+
+# 运行特定测试
+pytest tests/test_app.py -v
 ```
 
-### 2. 配置数据库
-修改`database/config.py`中的数据库连接参数。
+### 代码格式化
 
-### 3. 启动应用
 ```bash
-./start.sh
+# 格式化代码
+black src tests
+isort src tests
+
+# 检查代码质量
+ruff check src tests
+mypy src
 ```
 
-或直接运行：
+### 构建包
+
 ```bash
-python main.py
+# 构建 wheel 和 sdist
+python -m build
+
+# 安装构建的包
+pip install dist/dockingvina-1.0.0-py3-none-any.whl
 ```
 
-### 4. API接口
+## Docker 部署
 
-- `GET /`: 根路径，返回服务状态
-- `GET /health`: 健康检查
-- `POST /trigger-task-check`: 手动触发任务检查（测试用）
+```bash
+# 构建镜像
+docker build -t dockingvina:latest -f docker/Dockerfile .
+
+# 运行容器
+docker run -d \
+  --name dockingvina \
+  -p 8002:8002 \
+  -e DB_HOST=host.docker.internal \
+  -e SEAWEED_FILER_ENDPOINT=http://host.docker.internal:8888 \
+  dockingvina:latest
+```
 
 ## 工作流程
 
-1. **任务监控**: 应用每3分钟查询数据库中状态为`pending`的`docking`任务
+1. **任务监控**: 应用每3分钟查询数据库中状态为 `pending` 的 `docking` 任务
 2. **任务处理**: 
-   - 读取任务配置文件
-   - 验证输入文件
-   - 执行SMILES → PDBQT转换
-   - 运行AutoDock Vina对接
-   - 转换结果格式
-3. **状态更新**: 自动更新任务状态为`running`、`finished`或`failed`
-4. **结果保存**: 将结果保存到指定的输出目录
+   - 从 SeaweedFS 下载输入文件
+   - 验证配置并准备分子
+   - 执行 SMILES → PDBQT 转换 (Gypsum-DL)
+   - 运行 AutoDock Vina 对接
+   - 执行 BINANA 结合分析 (可选)
+   - 上传结果到 SeaweedFS
+3. **状态更新**: 自动更新数据库任务状态
 
-## 与peptide_opt的对比
+## 许可证
 
-| 特性 | peptide_opt | dockingVinaApp |
-|------|------------|----------------|
-| 任务类型 | peptide_optimization | docking |
-| 端口 | 8001 | 8002 |
-| 查询间隔 | 5分钟 | 3分钟 |
-| 配置文件 | optimization_config.txt | docking_config.json |
-| 输入格式 | FASTA + PDB | CSV + PDBQT |
+MIT License
 
-## 注意事项
+## 贡献
 
-1. 确保resource目录下有必要的资源文件
-2. 数据库连接配置正确
-3. AutoDock Vina和相关依赖正确安装
-4. 有足够的磁盘空间存储中间文件和结果
-
-## 故障排除
-
-1. **数据库连接失败**: 检查database/config.py中的连接参数
-2. **Vina运行失败**: 检查AutoDock Vina是否正确安装
-3. **文件路径错误**: 确保所有输入文件路径正确且文件存在
-4. **权限问题**: 确保应用有权限读写工作目录
-
-
-
-git clone https://github.com/durrantlab/gypsum_dl.git
-# or
-git clone git@github.com:durrantlab/gypsum_dl.git
-git clone https://github.com/SongyouZhong/gypsum_dl.git
-
-<!-- # 需要修改gypsum_dl/Start.py的源码
-# replace 'os.mkdir(params["output_folder"])' with os.makedirs(params["output_folder"], exist_ok=True) -->
+欢迎提交 Issue 和 Pull Request！
