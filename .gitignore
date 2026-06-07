@@ -80,3 +80,6 @@ dmypy.json
 /database/
 /services/
 /test/gypsum_dl/
+
+# Local-only Claude Code project guide (not tracked)
+CLAUDE.md
