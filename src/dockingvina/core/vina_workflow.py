@@ -430,7 +430,11 @@ def vina_dock(
         logger.info(f"Docking {lig_path.stem} with center={center}, box_size={box_size}")
         
         # Setup Vina
-        v = Vina(sf_name='vina')
+        # ADR 0012 P0-3: 必须显式传 cpu=。Vina 的默认 cpu=0 表示"自动用满所有核",
+        # 而它读的是宿主机核数(hardware_concurrency)、读不到 cgroup 限额;这个函数又跑在
+        # multiprocessing.Pool(n_jobs) 的每个子进程里 → n_jobs × 宿主机核数 个线程
+        # (8 × 24 ≈ 192)。并行度本来就由 Pool 提供,所以每个子进程只需要 1 个线程。
+        v = Vina(sf_name='vina', cpu=int(os.environ.get("VINA_CPU_PER_WORKER", "1")))
         
         # Set receptor
         try:
