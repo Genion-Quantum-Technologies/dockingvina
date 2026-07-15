@@ -1,5 +1,7 @@
 # Docking Vina CI/CD 文档和脚本
 
+> ⚠️ **LEGACY / 已废弃（2026-07-14，ADR 0012）**：本指南描述**裸机 micromamba 单机部署**；`cicd/scripts/deploy.sh` 与 `start_dockingvina_service.sh` 硬编码 `/home/davis/projects/...` 路径、并预期 src-layout 之前的 `main.py`。集群现由 **Argo Workflows** 运行（`python -m dockingvina.steps dock` 临时 pod，`dockingvina` Deployment `replicas: 0`）。本地开发用 `python -m dockingvina --port 8002` 或 `docker compose -f docker/docker-compose.yml up`。下方步骤仅存档。
+
 这个目录包含了Docking Vina服务的所有CI/CD相关文件，包括部署脚本和相关文档。
 
 ## 📂 目录结构

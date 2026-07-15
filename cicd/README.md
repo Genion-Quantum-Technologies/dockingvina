@@ -1,5 +1,7 @@
 # Docking Vina CI/CD 文档和脚本
 
+> ⚠️ **LEGACY / 已废弃（2026-07-14，ADR 0012）**：本目录脚本描述**裸机 micromamba 单机部署**，`cicd/scripts/*.sh` 硬编码上一位作者机器的 `/home/davis/projects/...` 路径、并预期一个 src-layout 之前的 `main.py`（现已重构进 `src/dockingvina/`）。集群现由 **Argo Workflows** 运行——`python -m dockingvina.steps dock` 作为临时 pod（`compute_foundry/workflows/docking.yaml`），`dockingvina` Deployment `replicas: 0`。本地开发用 `python -m dockingvina --port 8002` 或 `docker compose -f docker/docker-compose.yml up`；下方内容仅存档，勿照抄。
+
 这个目录包含了Docking Vina服务的所有CI/CD相关文件，包括部署脚本和相关文档。
 
 ## 📂 目录结构
