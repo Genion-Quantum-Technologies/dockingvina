@@ -5,6 +5,7 @@ Main application module for the molecular docking service.
 """
 
 import asyncio
+import os
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -56,10 +57,39 @@ async def lifespan(app: FastAPI):
     
     logger.info("Initializing async task processor...")
     async_processor = AsyncTaskProcessor()
-    
-    logger.info("Starting background task runner...")
-    background_task = asyncio.create_task(background_task_runner())
-    
+
+    # —— DB polling: OFF by default (ADR 0012 P2) ——
+    #
+    # This poller is dead code: Argo Workflows claims the work now and the `dockingvina`
+    # Deployment sits at `replicas: 0`. But THE CODE IS STILL ALIVE — the moment this FastAPI
+    # app starts, it starts claiming rows from the shared `tasks` table.
+    #
+    # 🔴 Why it must be OFF by default, not merely commented:
+    # the compute-foundry operator claims `status='pending' AND workflow_name IS NULL`. It writes
+    # `workflow_name` FIRST and only flips `status` to `processing` on its next project() pass —
+    # a window of up to 10s during which the row still reads `pending`. Anyone running this app
+    # locally (`docker compose up`, `dockingvina --port 8002`) against the production DB will claim
+    # the task inside that window → THE SAME JOB RUNS TWICE.
+    #
+    # Worse here than elsewhere: this worker's claim query is a bare
+    # `SELECT ... WHERE status='pending'` with no row lock at all, so it cannot even lose the race
+    # safely.
+    #
+    # The documented rollback still works: the k8s Deployment sets `LEGACY_POLLER=1` explicitly,
+    # so `kubectl scale deploy/dockingvina --replicas=1` restores the old behaviour exactly.
+    if os.environ.get("LEGACY_POLLER", "0") == "1":
+        logger.warning(
+            "LEGACY_POLLER=1 — starting the DB poller. This is the pre-ADR-0012 mode; "
+            "unless you are rolling back, you should not be seeing this line."
+        )
+        background_task = asyncio.create_task(background_task_runner())
+    else:
+        logger.info(
+            "DB polling disabled (ADR 0012: Argo Workflows + the compute-foundry operator own "
+            "scheduling). This process serves HTTP only; compute runs as "
+            "`python -m dockingvina.steps dock`."
+        )
+
     logger.info("Docking Vina API startup complete")
     yield
     

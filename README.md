@@ -1,10 +1,12 @@
 # DockingVina
 
-基于 AutoDock Vina 的分子对接服务，提供 FastAPI REST API 接口，支持数据库任务管理和 BINANA 结合分析。
+基于 AutoDock Vina 的分子对接服务。BINANA 结合分析。
+
+> ⚠️ **调度模型已变（2026-07-14，[ADR 0012](../../../docs/adr/0012-compute-scheduling-plane-argo.md)）**：集群里它已是**无状态 Argo step**（`python -m dockingvina.steps dock`，1 个 CPU 阶段，ephemeral pod），**不再是轮询数据库的常驻服务**。其长驻 Deployment `replicas: 0`，下述"数据库驱动 / 轮询"为遗留路径。
 
 ## 功能特点
 
-- **数据库驱动**: 从 PostgreSQL 数据库 tasks 表获取待处理的 docking 任务
+- **~~数据库驱动~~ → Argo 驱动**: 由 `compute-foundry` operator 把 `pending` 的 docking 行 reconcile 成 Argo Workflow，本仓只作为 step 镜像被调用 *(旧：直接轮询 `tasks` 表，现为死代码)*
 - **异步处理**: 使用 FastAPI + asyncio 实现高效的异步任务处理
 - **对象存储**: 集成 SeaweedFS 进行文件存储管理
 - **BINANA 分析**: 自动分析对接结果的结合模式和相互作用
@@ -245,17 +247,18 @@ docker run -d \
   dockingvina:latest
 ```
 
-## 工作流程
+## 工作流程（2026-07-14 起，[ADR 0012](../../../docs/adr/0012-compute-scheduling-plane-argo.md)）
 
-1. **任务监控**: 应用每3分钟查询数据库中状态为 `pending` 的 `docking` 任务
-2. **任务处理**: 
-   - 从 SeaweedFS 下载输入文件
+1. **提交**: 后端 INSERT 一行 `pending` 的 `docking` 任务；`compute-foundry` operator reconcile 成 Argo Workflow `t-{task_id}`
+2. **fetch**（通用 step）: 从 SeaweedFS 拉输入到 `/work`
+3. **dock**（本仓 step，`python -m dockingvina.steps dock`）:
    - 验证配置并准备分子
    - 执行 SMILES → PDBQT 转换 (Gypsum-DL)
-   - 运行 AutoDock Vina 对接
+   - 运行 AutoDock Vina 对接（`VINA_CPU_PER_WORKER=1`）
    - 执行 BINANA 结合分析 (可选)
-   - 上传结果到 SeaweedFS
-3. **状态更新**: 自动更新数据库任务状态
+4. **publish + finalize**（通用 step）: 上传结果到 SeaweedFS；onExit 钩子写终态状态 + 可读失败原因到 `tasks`
+
+> ~~旧模型：应用每 3 分钟轮询数据库、自动更新任务状态~~ —— 该轮询/写状态代码现为死代码（Deployment `replicas: 0`）。
 
 ## 许可证
 

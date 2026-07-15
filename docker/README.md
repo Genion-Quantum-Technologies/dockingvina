@@ -79,8 +79,8 @@ cd docker
 | `DB_NAME` | mydatabase | 数据库名称 |
 | `SEAWEED_FILER_ENDPOINT` | http://seaweedfs-filer:8888 | SeaweedFS Filer 端点 |
 | `SEAWEED_S3_ENDPOINT` | http://seaweedfs-s3:8333 | SeaweedFS S3 端点 |
-| `TASK_QUERY_INTERVAL` | 180 | 任务查询间隔 (秒) |
-| `MAX_CONCURRENT_TASKS` | 3 | 最大并发任务数 |
+| `TASK_QUERY_INTERVAL` | 180 | 任务查询间隔 (秒) —— ⚠️ 仅遗留轮询器用；自 2026-07-14（ADR 0012）轮询默认关闭（需 `LEGACY_POLLER=1`），集群改用 Argo，此项不再生效 |
+| `MAX_CONCURRENT_TASKS` | 3 | 最大并发任务数（同上，遗留轮询器专用） |
 | `DOCKING_NUM_CPU` | 8 | 对接使用的 CPU 数 |
 | `BINANA_ENABLED` | true | 是否启用 BINANA 分析 |
 | `APP_PORT` | 8000 | 应用端口 |
