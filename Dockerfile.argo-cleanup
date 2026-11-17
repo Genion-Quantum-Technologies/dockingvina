@@ -1,0 +1,8 @@
+# Preserve the verified scientific environment; remove retired service source.
+ARG BASE_IMAGE=hub.genionaitech.com/aidd/dockingvina@sha256:610aaa7f205f4a69d6df610f5bb0facf8c1b362e6b5ce4cedc49129ece78c857
+FROM ${BASE_IMAGE}
+USER root
+RUN rm -rf /app/src/dockingvina
+COPY src/dockingvina/ /app/src/dockingvina/
+HEALTHCHECK NONE
+CMD ["python", "-m", "dockingvina.steps", "--help"]

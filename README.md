@@ -1,3 +1,5 @@
+> Current runtime: [Argo scientific stages](docs/argo-runtime.md). Legacy HTTP/polling service instructions below are historical.
+
 # DockingVina
 
 基于 AutoDock Vina 的分子对接服务。BINANA 结合分析。

@@ -15,7 +15,6 @@ from dockingvina.config.settings import (
     PATHS,
     BINANA_CONFIG,
 )
-from dockingvina.config import storage
 from dockingvina.config.logging_config import setup_logging, get_log_file_path
 
 __all__ = [
@@ -29,7 +28,6 @@ __all__ = [
     "PATHS",
     "BINANA_CONFIG",
     # Other modules
-    "storage",
     "setup_logging",
     "get_log_file_path",
 ]
